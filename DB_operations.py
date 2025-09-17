@@ -141,7 +141,6 @@ def get_all_users():
     
 
 
-
 def search_user_by_aadhaar(aadhaar_number):
     """
     Searches for a user document in the 'users' collection by Aadhaar number.
@@ -159,8 +158,47 @@ def search_user_by_aadhaar(aadhaar_number):
         return {"success": True, "data": results}
     except Exception as e:
         return {"success": False, "error": str(e)}
+    
 
+def get_facilities_by_district(district):
+    """
+    Retrieves health facilities for a given district from the 'facility' collection.
 
+    Args:
+        district (str): The name of the district.
+
+    Returns:
+        dict: If successful, returns {"success": True, "district": <district_name>, "facilities": <facilities_list>}.
+            If not found, returns {"success": False, "error": "No facilities found for district '<district>'"}.
+            If failed, returns {"success": False, "error": <error_message>}.
+    """
+    try:
+        doc_ref = db.collection("facility").document(district)
+        doc = doc_ref.get()
+        if doc.exists:
+            data = doc.to_dict()
+            facilities = data.get("healthFacilities", [])
+            facility_info = []
+            for facility in facilities:
+                info = {
+                    "facilityName": facility.get("facilityName"),
+                    "phoneNumbers": facility.get("phoneNumbers", []),
+                    "address": facility.get("address"),
+                    "facilityType": facility.get("facilityType"),
+                    "services": facility.get("services", []),
+                    "workingHours": facility.get("workingHours"),
+                    "remarks": facility.get("remarks", "")
+                }
+                facility_info.append(info)
+            return {
+                "success": True,
+                "district": data.get("districtName"),
+                "facilities": facility_info
+            }
+        else:
+            return {"success": False, "error": f"No facilities found for district '{district}'"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
 
 
