@@ -6,11 +6,15 @@ from LLM_inference import predict_follow_up_date
 import json
 from datetime import datetime, timedelta
 
-cred = credentials.Certificate("ps82-stellarythm-firebase-adminsdk-fbsvc-de4ed2b41c.json")
+import os
+
+service_account_path = os.path.join(os.path.dirname(__file__), "ps82-stellarythm-firebase-adminsdk-fbsvc-de4ed2b41c.json")
+if not os.path.exists(service_account_path):
+    raise FileNotFoundError(f"Service account file not found: {service_account_path}")
+
+cred = credentials.Certificate(service_account_path)
 app = firebase_admin.initialize_app(cred)
-# print(app)
 db = firestore.client()
-# print(db)
 
 
 def add_user(data):
@@ -303,44 +307,47 @@ def validate_otp(user_id, entered_otp):
 def main():
     # Example data
     user_dataa = {
-        "name": "Jane Doe",
-        "age": 57,
-        "blood_group": "A+",
-        "language": "en",
-        "gender": "M",
-        "address": "456 Avenue Name",
-        "aadhaarNumber": "9876-5432-1898",
-        "phonenumber": 7887788778,
-        "originState": "Kerala",
-        "originDistrict": "Ernakulam",
-        "destinationDistrict": "Cuttack",
-        "records": {
-            "vaccination1": True,
-            "vaccination2": True,
-            "specialNotes": "None",
-            "lastVisitReason": "Fever and cough",
-            "lastVisitDate": "2025-09-10",
-            "visitLocation": "District Hospital Ernakulam",
-            "currentSymptoms": ["fever", "cough"],
-            "nextFollowUpDate": "2025-09-24",
-            "reminderStatus": "2025-09-10T09:00:00Z",
-            "outbreakFlag": False
+    "name": "Jane Doe",
+    "age": 57,
+    "blood_group": "A+",
+    "language": "en",
+    "gender": "M",
+    "address": "456 Avenue Name",
+    "aadhaarNumber": "9876-5432-1898",
+    "phonenumber": 7887788778,
+    "originState": "Kerala",
+    "originDistrict": "Ernakulam",
+    "destinationDistrict": "Cuttack",
+    "records": {
+        "vaccination1": True,
+        "vaccination2": True,
+        "specialNotes": "None",
+        "lastVisitReason": "Fever and cough",
+        "lastVisitDate": "2025-09-10",
+        "visitLocation": "District Hospital Ernakulam",
+        "currentSymptoms": ["fever", "cough"],
+        "nextFollowUpDate": "2025-09-24",
+        "reminderStatus": "2025-09-10T09:00:00Z",
+        "outbreakFlag": False
+    },
+    "companies": [
+        {
+            "name": "DEF Industries",
+            "from": "xxxxxxxxxxxxxx",
+            "to": "2024-01-31",
+            "working": False
         },
-        "companies": [
-            {
-                "name": "DEF Industries",
-                "from": "xxxxxxxxxxxxxx",
-                "to": "2024-01-31",
-                "working": False
-            },
-            {
-                "name": "GHI Services",
-                "from": "2024-02-01",
-                "to": None,
-                "working": True
-            }
-        ]
-    }
+        {
+            "name": "GHI Services",
+            "from": "2024-02-01",
+            "to": None,
+            "working": True
+        }
+    ],
+
+    "aadhaarPhotoUrl": "https://storage.googleapis.com/bucket/aadhaar_jane_doe.jpg",
+    "profilePhotoUrl": "https://avatar.iran.liara.run/public/",
+}
 
     # Add user
     add_result = add_user(user_dataa)

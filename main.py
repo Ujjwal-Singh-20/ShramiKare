@@ -227,9 +227,12 @@ async def generate_otp(user_id: str = Form(...)):
             target_language = user_data.get("language", "en")
             phone_number = str(user_data.get("phonenumber"))
             otp_message = f"Your OTP is: {otp}"
-            translation_result = await multilingual_output(otp_message, target_language)
-            translated_message = translation_result.get("advice", [otp_message])[0]
-            send_sms_message(phone=phone_number, message=translated_message)
+            if(target_language!="en"):
+                translation_result = await multilingual_output(otp_message, target_language)
+                translated_message = translation_result.get("advice", [otp_message])[0]
+                send_sms_message(phone=phone_number, message=translated_message)
+            else:
+                send_sms_message(phone=phone_number, message=otp_message)
         return {"message": "OTP generated", "otp": otp}
     return JSONResponse(status_code=500, content={"error": result.get("error")})
 
