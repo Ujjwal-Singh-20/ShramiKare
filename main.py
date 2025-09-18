@@ -4,11 +4,14 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import requests
 from fastapi import Body
-from DB_operations import add_user, get_all_users, search_user_by_aadhaar, get_user_by_id, update_user, delete_user, get_facilities_by_district
+from DB_operations import add_user, get_all_users, search_user_by_aadhaar, get_user_by_id, update_user, delete_user, get_facilities_by_district, get_all_users_json, store_otp, validate_otp
 from LLM_inference import invoke_nvidia_llm
 from message import send_sms_message
-import firebase_admin
-from firebase_admin import credentials, firestore
+from translate import multilingual_output
+import json
+from google import genai
+from fastapi import Form
+import random
 
 app = FastAPI(root_path="/api")
 # app = FastAPI()
@@ -33,6 +36,14 @@ async def list_migrants():
     result = get_all_users()
     if result.get("success"):
         return result["data"]
+    return JSONResponse(status_code=400, content={"error": result.get("error")})
+
+#get all users full data, for company wise grouping in frontend
+@app.get("/users/json/")
+async def list_migrants_json():
+    result = get_all_users_json()
+    if result.get("success"):
+        return JSONResponse(content=json.loads(result["json"]))
     return JSONResponse(status_code=400, content={"error": result.get("error")})
 
 @app.get("/users/by-aadhaar/{aadhaar_number}")
@@ -124,8 +135,12 @@ async def send_reminder(aadhaar_id: str):
         raise HTTPException(status_code=500, detail=llm_response["error"])
 
     advisory_message = llm_response.get("advice", ["Please follow up with nearest health facility"])[0]
+    # Translate advisory message to user's preferred language
+    target_language = user_data.get("language", "en")
+    translation_result = await multilingual_output(advisory_message, target_language)
+    advisory_message = translation_result.get("advice", [advisory_message])[0]
 
-    # Send SMS in user's preferred language (assuming English here, can add translation logic)
+    # Send SMS in user's preferred language
     phone_number = str(user_data.get("phonenumber"))
     if not phone_number:
         raise HTTPException(status_code=400, detail="User phone number missing")
@@ -133,3 +148,91 @@ async def send_reminder(aadhaar_id: str):
     sms_sid = send_sms_message(phone=phone_number, message=advisory_message)
 
     return {"message": "Reminder sent successfully", "sms_sid": sms_sid}
+
+
+client = genai.Client()
+
+@app.get("/outbreak-prediction/")
+async def outbreak_prediction():
+    try:
+        user_results = get_all_users()
+        if not user_results.get("success") or not user_results.get("data"):
+            raise HTTPException(status_code=404, detail="No user data found")
+
+        user_data_list = user_results["data"]
+
+        case_lines = []
+        for user in user_data_list:
+            symptoms = ", ".join(user.get("records", {}).get("currentSymptoms", [])) or "none"
+            line = (f"{user.get('name', 'Unknown')}, Age: {user.get('age', 'N/A')}, "
+                    f"From: {user.get('originDistrict', 'N/A')}, "
+                    f"At: {user.get('destinationDistrict', 'N/A')}, "
+                    f"Symptoms: {symptoms}, "
+                    f"Last Visit Reason: {user.get('records', {}).get('lastVisitReason', 'N/A')}, "
+                    f"Last Visit Date: {user.get('records', {}).get('lastVisitDate', 'N/A')}")
+            case_lines.append(line)
+
+        prompt = f"""
+        Health Surveillance Report:
+
+        Recent cases summary (last 7 days):
+        {chr(10).join(case_lines)}
+
+        Please analyze these cases and provide:
+        1. A summary of possible outbreak patterns or clusters.
+        2. A severity score between 0 and 100 (100 = highest risk).
+
+        Return the response as a JSON object with fields "summary" and "severity_score".
+        KEEP THE LENGTH WITHIN 1200 CHARACTERS
+        """
+
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt
+        )
+
+        text = response.text.strip()
+        try:
+            output = json.loads(text)
+        except json.JSONDecodeError:
+            output = {"summary": text, "severity_score": 0}
+
+        # Example alert logic - call only if severity > 50
+        severity = output.get("severity_score", 0)
+        if severity > 50:
+            alert_message = f"OUTBREAK ALERT! Severity: {severity}/100\n{output.get('summary', '')}" #restrict length, and keep basic info just for show
+            # Fetch or define official phone numbers here
+            official_numbers = ["9330559738", "9937080977"]
+            for number in official_numbers:
+                send_sms_message(phone=number, message=alert_message)
+
+        return {"outbreak_summary": output.get("summary"), "severity_score": severity}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/otp/generate/")
+async def generate_otp(user_id: str = Form(...)):
+    otp = str(random.randint(100000, 999999))
+    result = store_otp(user_id, otp)
+    if result.get("success"):
+        # Translate OTP message to user's preferred language and send SMS
+        user = get_user_by_id(user_id)
+        if user.get("success") and user.get("data"):
+            user_data = user["data"]
+            target_language = user_data.get("language", "en")
+            phone_number = str(user_data.get("phonenumber"))
+            otp_message = f"Your OTP is: {otp}"
+            translation_result = await multilingual_output(otp_message, target_language)
+            translated_message = translation_result.get("advice", [otp_message])[0]
+            send_sms_message(phone=phone_number, message=translated_message)
+        return {"message": "OTP generated", "otp": otp}
+    return JSONResponse(status_code=500, content={"error": result.get("error")})
+
+@app.post("/otp/validate/")
+async def check_otp(user_id: str = Form(...), otp: str = Form(...)):
+    result = validate_otp(user_id, otp)
+    if result.get("success"):
+        return {"message": "OTP validated"}
+    return JSONResponse(status_code=400, content={"error": result.get("error")})

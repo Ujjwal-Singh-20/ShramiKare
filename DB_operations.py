@@ -2,6 +2,9 @@
 
 import firebase_admin
 from firebase_admin import credentials, firestore
+from LLM_inference import predict_follow_up_date
+import json
+from datetime import datetime, timedelta
 
 cred = credentials.Certificate("ps82-stellarythm-firebase-adminsdk-fbsvc-de4ed2b41c.json")
 app = firebase_admin.initialize_app(cred)
@@ -82,6 +85,7 @@ def get_user_by_id(user_id):
 def update_user(user_id, update_data):
     """
     Updates an existing user document in the 'users' collection.
+    If 'records.lastVisitDate' is updated, predicts and sets 'records.nextFollowUpDate'.
 
     Args:
         user_id (str): The unique document ID of the user to update.
@@ -94,7 +98,20 @@ def update_user(user_id, update_data):
     """
     try:
         doc_ref = db.collection('users').document(user_id)
-        if doc_ref.get().exists:
+        doc = doc_ref.get()
+        if doc.exists:
+            # Check if lastVisitDate is being updated
+            records_update = update_data.get("records", {})
+            if "lastVisitDate" in records_update:
+                # Get current user data for prediction
+                user_data = doc.to_dict()
+                # Merge update_data into user_data for accurate prediction
+                user_data["records"] = {**user_data.get("records", {}), **records_update}
+                # Predict next follow-up date
+                next_follow_up = predict_follow_up_date(user_data)
+                if next_follow_up:
+                    records_update["nextFollowUpDate"] = next_follow_up
+                    update_data["records"] = records_update
             doc_ref.update(update_data)
             return {"success": True}
         else:
@@ -136,6 +153,23 @@ def get_all_users():
         users = db.collection('users').stream()
         user_list = [{**doc.to_dict(), "id": doc.id} for doc in users]
         return {"success": True, "data": user_list}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def get_all_users_json():
+    """
+    Retrieves all user documents from the 'users' collection and returns them as a JSON string.
+
+    Returns:
+        dict: If successful, returns {"success": True, "json": <json_string>}, where <json_string> is the JSON representation of all users.
+            If failed, returns {"success": False, "error": <error_message>}.
+    """
+    try:
+        users = db.collection('users').stream()
+        user_list = [{**doc.to_dict(), "id": doc.id} for doc in users]
+        json_string = json.dumps(user_list, default=str)
+        return {"success": True, "json": json_string}
     except Exception as e:
         return {"success": False, "error": str(e)}
     
@@ -202,6 +236,69 @@ def get_facilities_by_district(district):
 
 
 
+def store_otp(user_id, otp, validity_minutes=10):
+    """
+    Stores an OTP for a user in the 'otps' collection with validity and status.
+
+    Args:
+        user_id (str): The user's document ID.
+        otp (str): The OTP to store.
+        validity_minutes (int): Minutes until OTP expires.
+
+    Returns:
+        dict: Success status.
+    """
+    try:
+        doc_ref = db.collection("otps").document(user_id)
+        now = datetime.utcnow()
+        new_otp_record = {
+            "otp": otp,
+            "createdAt": now.isoformat(),
+            "expiresAt": (now + timedelta(minutes=validity_minutes)).isoformat(),
+            "status": "active"
+        }
+        doc = doc_ref.get()
+        if doc.exists:
+            otp_history = doc.to_dict().get("otpHistory", [])
+            otp_history.append(new_otp_record)
+            doc_ref.update({"otpHistory": otp_history})
+        else:
+            doc_ref.set({"otpHistory": [new_otp_record]})
+        return {"success": True}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+def validate_otp(user_id, entered_otp):
+    """
+    Validates an entered OTP for a user.
+
+    Args:
+        user_id (str): The user's document ID.
+        entered_otp (str): The OTP to validate.
+
+    Returns:
+        dict: Success status.
+    """
+    try:
+        doc_ref = db.collection("otps").document(user_id)
+        doc = doc_ref.get()
+        if not doc.exists:
+            return {"success": False, "error": "OTP record not found"}
+        otp_history = doc.to_dict().get("otpHistory", [])
+        now = datetime.utcnow().isoformat()
+        for record in reversed(otp_history):
+            if record["otp"] == entered_otp:
+                if record["status"] == "active" and record["expiresAt"] > now:
+                    record["status"] = "used"
+                    doc_ref.update({"otpHistory": otp_history})
+                    return {"success": True}
+                return {"success": False, "error": "OTP expired or already used"}
+        return {"success": False, "error": "OTP not found"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+
 #below code will be used for testing and will only run from this file
 def main():
     # Example data
@@ -210,6 +307,7 @@ def main():
         "age": 57,
         "blood_group": "A+",
         "language": "en",
+        "gender": "M",
         "address": "456 Avenue Name",
         "aadhaarNumber": "9876-5432-1898",
         "phonenumber": 7887788778,
@@ -219,7 +317,14 @@ def main():
         "records": {
             "vaccination1": True,
             "vaccination2": True,
-            "specialNotes": "None"
+            "specialNotes": "None",
+            "lastVisitReason": "Fever and cough",
+            "lastVisitDate": "2025-09-10",
+            "visitLocation": "District Hospital Ernakulam",
+            "currentSymptoms": ["fever", "cough"],
+            "nextFollowUpDate": "2025-09-24",
+            "reminderStatus": "2025-09-10T09:00:00Z",
+            "outbreakFlag": False
         },
         "companies": [
             {
@@ -273,3 +378,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+    store_otp("cfxfnCXG4jSOAGL0nVzE",123456)
+    #validate_otp("cfxfnCXG4jSOAGL0nVzE", 1236)
+    validate_otp("cfxfnCXG4jSOAGL0nVzE", 123456)
