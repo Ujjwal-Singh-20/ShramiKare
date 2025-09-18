@@ -12,6 +12,8 @@ import json
 from google import genai
 from fastapi import Form
 import random
+from QR_generator import generate_qr
+from datetime import datetime, timezone
 
 app = FastAPI(root_path="/api")
 # app = FastAPI()
@@ -127,6 +129,7 @@ async def send_reminder(aadhaar_id: str):
     Companies Worked: {[c['name'] for c in user_data['companies']]}
     
     Based on these details, generate a brief health advisory message for reminders.
+    (KEEP THE OUTPUT IN LESS THAN 1200 CHARACTERS)
     """
 
     # Call Nvidia LLM inference
@@ -236,3 +239,79 @@ async def check_otp(user_id: str = Form(...), otp: str = Form(...)):
     if result.get("success"):
         return {"message": "OTP validated"}
     return JSONResponse(status_code=400, content={"error": result.get("error")})
+
+
+#GET /generate-qr/?text=https://example.com
+@app.get("/generate-qr/")
+async def get_qr_code(text: str = Query(..., description="Text or URL to encode as QR")):
+    try:
+        html_img_tag = generate_qr(text)
+        return Response(content=html_img_tag, media_type="text/html")
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+@app.get("/send-followup-reminders/")
+async def send_followup_reminders():
+    try:
+        users_result = get_all_users()
+        if not users_result.get("success") or not users_result.get("data"):
+            raise HTTPException(status_code=404, detail="No users found")
+
+        users = users_result["data"]
+        now = datetime.now(timezone.utc).date()
+        reminder_window_days = 3
+        reminders_sent = 0
+
+        for user in users:
+            next_followup_str = user.get("records", {}).get("nextFollowUpDate")
+            if not next_followup_str:
+                continue
+
+            try:
+                next_followup_date = datetime.strptime(next_followup_str, "%Y-%m-%d").date()
+            except ValueError:
+                continue  # Skip invalid date format
+
+            days_until_followup = (next_followup_date - now).days
+            if 0 <= days_until_followup <= reminder_window_days:
+                phone = str(user.get("phonenumber"))
+                if not phone:
+                    continue
+
+                target_language = user.get("language", "en")
+                message = (f"Dear {user.get('name', 'User')}, your next health follow-up is scheduled on "
+                           f"{next_followup_date.strftime('%d-%b-%Y')}. Please book your appointment at the earliest. Stay safe!")
+
+                translation_result = await multilingual_output(message, target_language)
+                translated_message = translation_result.get("advice", [message])[0]
+
+                send_sms_message(phone=phone, message=translated_message)
+                reminders_sent += 1
+
+                # Optionally update reminder status with timestamp
+                update_user(
+                    user_id=user.get("aadhaarNumber"),
+                    update_data={"records.reminderStatus": datetime.now(timezone.utc).isoformat()}
+                )
+
+        return {"message": f"Reminders sent to {reminders_sent} users."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+import asyncio
+
+if __name__=="__main__":
+    asyncio.run(send_followup_reminders())
+
+
+
+#kepp in mind about async and all for running different functions, according to await and all  
+
+
+
+
+
+
+
+
+# പ്രിയ ജെയ്ൻ ഡൂ, നിങ്ങളുടെ അടുത്ത ഹെൽത്ത് ഫോളോ-അപ്പ് 18-സെപ്റ്റംബർ -2025 ന് ഷെഡ്യൂൾ ചെയ്തിട്ടുണ്ട്. നിങ്ങളുടെ കൂടിക്കാഴ്ച വേഗത്തിൽ ബുക്ക് ചെയ്യുക. സുരക്ഷിതമായി തുടരുക
