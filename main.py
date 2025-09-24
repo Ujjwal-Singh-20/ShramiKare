@@ -14,6 +14,8 @@ from fastapi import Form
 import random
 from QR_generator import generate_qr
 from datetime import datetime, timezone
+import os
+import uvicorn
 
 app = FastAPI(root_path="/api")
 # app = FastAPI()
@@ -221,9 +223,9 @@ async def generate_otp(user_id: str = Form(...)):
     result = store_otp(user_id, otp)
     if result.get("success"):
         # Translate OTP message to user's preferred language and send SMS
-        user = get_user_by_id(user_id)
+        user = search_user_by_aadhaar(user_id)#get_user_by_id(user_id)
         if user.get("success") and user.get("data"):
-            user_data = user["data"]
+            user_data = user["data"][0]
             target_language = user_data.get("language", "en")
             phone_number = str(user_data.get("phonenumber"))
             otp_message = f"Your OTP is: {otp}"
@@ -271,7 +273,8 @@ async def send_followup_reminders():
                 continue
 
             try:
-                next_followup_date = datetime.strptime(next_followup_str, "%Y-%m-%d").date()
+                next_followup_str_clean = next_followup_str.strip()
+                next_followup_date = datetime.strptime(next_followup_str_clean, "%Y-%m-%d").date()
             except ValueError:
                 continue  # Skip invalid date format
 
@@ -303,9 +306,9 @@ async def send_followup_reminders():
 
 import asyncio
 
-if __name__=="__main__":
-    asyncio.run(send_followup_reminders())
-
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8080))
+    uvicorn.run(app, host="0.0.0.0", port=port)
 
 
 #kepp in mind about async and all for running different functions, according to await and all  
